@@ -65,8 +65,12 @@ public class Fragment_Overview extends Fragment implements SensorEventListener {
     private PieChart pg;
 
     private int todayOffset, total_start, goal, since_boot, total_days;
-    public final static NumberFormat formatter = NumberFormat.getInstance(Locale.getDefault());
+    private final static NumberFormat formatter = NumberFormat.getInstance(Locale.getDefault());
     private boolean showSteps = true;
+
+    public static NumberFormat getFormatter() {
+        return formatter;
+    }
 
     @Override
     public void onCreate(final Bundle savedInstanceState) {
