@@ -15,10 +15,8 @@
  */
 package de.j4velin.pedometer.ui;
 
-import android.app.AlertDialog;
 import android.app.Fragment;
 import android.content.Context;
-import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
@@ -102,7 +100,8 @@ public class Fragment_Overview extends Fragment implements SensorEventListener {
 
         pg.setDrawValueInPie(false);
         pg.setUsePieRotation(true);
-        pg.startAnimation();
+       // pg.startAnimation();
+        pg.update();
         return v;
     }
 
@@ -129,7 +128,7 @@ public class Fragment_Overview extends Fragment implements SensorEventListener {
             SensorManager sm =
                     (SensorManager) getActivity().getSystemService(Context.SENSOR_SERVICE);
             Sensor sensor = sm.getDefaultSensor(Sensor.TYPE_STEP_COUNTER);
-            if (sensor == null) {
+            /*if (sensor == null) {
                 new AlertDialog.Builder(getActivity()).setTitle(R.string.no_sensor)
                         .setMessage(R.string.no_sensor_explain)
                         .setOnDismissListener(new DialogInterface.OnDismissListener() {
@@ -147,6 +146,7 @@ public class Fragment_Overview extends Fragment implements SensorEventListener {
             } else {
                 sm.registerListener(this, sensor, SensorManager.SENSOR_DELAY_UI, 0);
             }
+            */
         }
 
         since_boot -= pauseDifference;
@@ -238,7 +238,7 @@ public class Fragment_Overview extends Fragment implements SensorEventListener {
                 d.setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_ATOP);
                 item.setIcon(d);
                 getActivity().startService(new Intent(getActivity(), SensorListener.class)
-                        .putExtra("action", SensorListener.ACTION_PAUSE));
+                        .setAction(SensorListener.ACTION_PAUSE));
                 return true;
             default:
                 return ((Activity_Main) getActivity()).optionsItemSelected(item);

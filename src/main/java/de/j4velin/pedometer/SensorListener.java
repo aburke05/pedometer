@@ -39,6 +39,43 @@ import de.j4velin.pedometer.util.Logger;
 import de.j4velin.pedometer.util.Util;
 import de.j4velin.pedometer.widget.WidgetUpdateService;
 
+
+/*
+
+updates step calculations to account for the ability to be paused
+
+Idea:
+ - keep track of the last step number so that it can check how many steps were taken since the last event
+
+ int lastStep = 0;
+ bool isPaused = false;
+
+  int current = 0;
+
+
+  event loop
+  {
+        current = event.getTotoalSteps()
+
+        if (paused)
+            last = current
+            continue
+
+       int numTaken = curent - lastStep
+
+       db.save(numTaken, System.getCurrentTime))
+
+       broadcast(dbUpdated)
+  }
+
+
+
+
+
+ */
+
+
+
 /**
  * Background service which keeps the step-sensor listener alive to always get
  * the number of steps since boot.
@@ -54,13 +91,16 @@ public class SensorListener extends Service implements SensorEventListener {
     private final static int SAVE_OFFSET_STEPS = 500;
 
     public final static String ACTION_PAUSE = "pause";
+    public final static String ACTION_UPDATE_NOTIFICATION = "updateNotificationState";
+
 
     private static int steps;
     private static int lastSaveSteps;
     private static long lastSaveTime;
 
 
-    public final static String ACTION_UPDATE_NOTIFICATION = "updateNotificationState";
+    private boolean paused = false;
+    private static int pauseCount = 0;
 
     @Override
     public void onAccuracyChanged(final Sensor sensor, int accuracy) {
@@ -83,26 +123,40 @@ public class SensorListener extends Service implements SensorEventListener {
     private void updateIfNecessary() {
         if (steps > lastSaveSteps + SAVE_OFFSET_STEPS ||
                 (steps > 0 && System.currentTimeMillis() > lastSaveTime + SAVE_OFFSET_TIME)) {
+
             if (BuildConfig.DEBUG) Logger.log(
                     "saving steps: steps=" + steps + " lastSave=" + lastSaveSteps +
                             " lastSaveTime=" + new Date(lastSaveTime));
+
             Database db = Database.getInstance(this);
+
             if (db.getSteps(Util.getToday()) == Integer.MIN_VALUE) {
-                int pauseDifference = steps -
-                        getSharedPreferences("pedometer", Context.MODE_PRIVATE)
-                                .getInt("pauseCount", steps);
+
+                int pauseDifference = steps - pauseCount;
+
                 db.insertNewDay(Util.getToday(), steps - pauseDifference);
+
+                
+                /// FIXME: 2018-02-14 I dont get what is going on with this pause count thing
+
                 if (pauseDifference > 0) {
                     // update pauseCount for the new day
+
+                    pauseCount = steps;
+
                     getSharedPreferences("pedometer", Context.MODE_PRIVATE).edit()
                             .putInt("pauseCount", steps).commit();
                 }
             }
+
             db.saveCurrentSteps(steps);
             db.close();
+
             lastSaveSteps = steps;
             lastSaveTime = System.currentTimeMillis();
             updateNotificationState();
+
+            // update the widget
             startService(new Intent(this, WidgetUpdateService.class));
         }
     }
@@ -114,41 +168,54 @@ public class SensorListener extends Service implements SensorEventListener {
 
     @Override
     public int onStartCommand(final Intent intent, int flags, int startId) {
-        if (intent != null && ACTION_PAUSE.equals(intent.getStringExtra("action"))) {
-            if (BuildConfig.DEBUG)
-                Logger.log("onStartCommand action: " + intent.getStringExtra("action"));
+
+        String action = intent != null && intent.getAction() != null ? intent.getAction() : "";
+
+        if (action.equals(ACTION_PAUSE)){
+
             if (steps == 0) {
                 Database db = Database.getInstance(this);
                 steps = db.getCurrentSteps();
                 db.close();
             }
-            SharedPreferences prefs = getSharedPreferences("pedometer", Context.MODE_PRIVATE);
-            if (prefs.contains("pauseCount")) { // resume counting
-                int difference = steps -
-                        prefs.getInt("pauseCount", steps); // number of steps taken during the pause
-                Database db = Database.getInstance(this);
-                db.addToLastEntry(-difference);
-                db.close();
-                prefs.edit().remove("pauseCount").commit();
+
+            // if it was currently paused
+            if (paused) {
+
+                if (pauseCount != 0) {
+                    int difference = steps - pauseCount; // number of steps taken during the pause
+                    Database db = Database.getInstance(this);
+                    db.addToLastEntry(-difference);
+                    db.close();
+                }
+
+                //resume counting
+                pauseCount = 0;
+                paused = false;
                 updateNotificationState();
-            } else { // pause counting
+            }
+            else {
+                // it wants to pause
+
+                paused = true;
+                pauseCount = steps;
+
                 // cancel restart
                 ((AlarmManager) getApplicationContext().getSystemService(Context.ALARM_SERVICE))
                         .cancel(PendingIntent.getService(getApplicationContext(), 2,
                                 new Intent(this, SensorListener.class),
                                 PendingIntent.FLAG_UPDATE_CURRENT));
-                prefs.edit().putInt("pauseCount", steps).commit();
+
                 updateNotificationState();
                 stopSelf();
                 return START_NOT_STICKY;
             }
         }
-
-        if (intent != null && intent.getBooleanExtra(ACTION_UPDATE_NOTIFICATION, false)) {
+        else if (action.equals(ACTION_UPDATE_NOTIFICATION)) {
             updateNotificationState();
-        } else {
-            updateIfNecessary();
         }
+
+        updateIfNecessary();
 
         // restart service every hour to save the current step count
         ((AlarmManager) getApplicationContext().getSystemService(Context.ALARM_SERVICE))
@@ -165,6 +232,7 @@ public class SensorListener extends Service implements SensorEventListener {
     public void onCreate() {
         super.onCreate();
         if (BuildConfig.DEBUG) Logger.log("SensorListener onCreate");
+
         reRegisterSensor();
         updateNotificationState();
     }
@@ -173,6 +241,7 @@ public class SensorListener extends Service implements SensorEventListener {
     public void onTaskRemoved(final Intent rootIntent) {
         super.onTaskRemoved(rootIntent);
         if (BuildConfig.DEBUG) Logger.log("sensor service task removed");
+
         // Restart service in 500 ms
         ((AlarmManager) getSystemService(Context.ALARM_SERVICE))
                 .set(AlarmManager.RTC, System.currentTimeMillis() + 500, PendingIntent
@@ -194,42 +263,72 @@ public class SensorListener extends Service implements SensorEventListener {
 
     private void updateNotificationState() {
         if (BuildConfig.DEBUG) Logger.log("SensorListener updateNotificationState");
+
+
         SharedPreferences prefs = getSharedPreferences("pedometer", Context.MODE_PRIVATE);
-        NotificationManager nm =
-                (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+
         if (prefs.getBoolean("notification", true)) {
+
             int goal = prefs.getInt("goal", 10000);
             Database db = Database.getInstance(this);
             int today_offset = db.getSteps(Util.getToday());
+
+
             if (steps == 0)
                 steps = db.getCurrentSteps(); // use saved value if we haven't anything better
             db.close();
+
             Notification.Builder notificationBuilder = new Notification.Builder(this);
+
+            // this will set the progress bar in the notification
             if (steps > 0) {
                 if (today_offset == Integer.MIN_VALUE) today_offset = -steps;
-                notificationBuilder.setProgress(goal, today_offset + steps, false).setContentText(
-                        today_offset + steps >= goal ? getString(R.string.goal_reached_notification,
-                                NumberFormat.getInstance(Locale.getDefault())
-                                        .format((today_offset + steps))) :
-                                getString(R.string.notification_text,
-                                        NumberFormat.getInstance(Locale.getDefault())
-                                                .format((goal - today_offset - steps))));
+
+                String text;
+                if (today_offset + steps >= goal) {
+                    // show the number of steps taken
+                    text = getString(R.string.goal_reached_notification,
+                            NumberFormat.getInstance(Locale.getDefault()).format((today_offset + steps)));
+                }
+                else {
+                    // show num steps until goal is reached
+                    text = getString(R.string.notification_text,
+                            NumberFormat.getInstance(Locale.getDefault()).format((goal - today_offset - steps)));
+
+                }
+
+                notificationBuilder.setProgress(goal, today_offset + steps, false)
+                        .setContentText(text);
+
             } else { // still no step value?
                 notificationBuilder
                         .setContentText(getString(R.string.your_progress_will_be_shown_here_soon));
             }
-            boolean isPaused = prefs.contains("pauseCount");
-            notificationBuilder.setPriority(Notification.PRIORITY_MIN).setShowWhen(false)
-                    .setContentTitle(isPaused ? getString(R.string.ispaused) :
-                            getString(R.string.notification_title)).setContentIntent(PendingIntent
+
+            // moved these out of the chunk below for readbility
+            String title = paused ?  getString(R.string.ispaused): getString(R.string.notification_title);
+            int icon = paused ? R.drawable.ic_resume : R.drawable.ic_pause;
+            String title2 = paused ? getString(R.string.resume) : getString(R.string.pause);
+
+
+            // add more things to the notification
+            notificationBuilder
+                    .setPriority(Notification.PRIORITY_MIN)
+                    .setShowWhen(false)
+                    .setContentTitle(title)
+                    .setContentIntent(PendingIntent
                     .getActivity(this, 0, new Intent(this, Activity_Main.class),
                             PendingIntent.FLAG_UPDATE_CURRENT))
                     .setSmallIcon(R.drawable.ic_notification)
-                    .addAction(isPaused ? R.drawable.ic_resume : R.drawable.ic_pause,
-                            isPaused ? getString(R.string.resume) : getString(R.string.pause),
+                    .addAction(icon,
+                            title2,
                             PendingIntent.getService(this, 4, new Intent(this, SensorListener.class)
-                                            .putExtra("action", ACTION_PAUSE),
-                                    PendingIntent.FLAG_UPDATE_CURRENT)).setOngoing(true);
+                            .setAction(ACTION_PAUSE),
+                                    PendingIntent.FLAG_UPDATE_CURRENT))
+                    .setOngoing(true);
+
+
             nm.notify(NOTIFICATION_ID, notificationBuilder.build());
         } else {
             nm.cancel(NOTIFICATION_ID);
@@ -238,6 +337,7 @@ public class SensorListener extends Service implements SensorEventListener {
 
     private void reRegisterSensor() {
         if (BuildConfig.DEBUG) Logger.log("re-register sensor listener");
+
         SensorManager sm = (SensorManager) getSystemService(SENSOR_SERVICE);
         try {
             sm.unregisterListener(this);

@@ -30,12 +30,13 @@ public class PowerReceiver extends BroadcastReceiver {
                 !prefs.contains("pauseCount")) {
             // if power connected & not already paused, then pause now
             context.startService(new Intent(context, SensorListener.class)
-                    .putExtra("action", SensorListener.ACTION_PAUSE));
+                    .setAction(SensorListener.ACTION_PAUSE));
         } else if (Intent.ACTION_POWER_DISCONNECTED.equals(intent.getAction()) &&
                 prefs.contains("pauseCount")) {
             // if power disconnected & currently paused, then resume now
             context.startService(new Intent(context, SensorListener.class)
-                    .putExtra("action", SensorListener.ACTION_PAUSE));
+                            .setAction(SensorListener.ACTION_PAUSE)
+                    );
         }
     }
 }
